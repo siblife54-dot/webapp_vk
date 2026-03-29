@@ -5,6 +5,7 @@
   var LEGACY_STORAGE_KEY = "completedLessons";
   var DEBUG_IMG_STATUS = {};
   var DEBUG_LAST_CONTEXT = null;
+  var platformAdapter = window.PlatformAdapter || null;
 
   function getConfig() {
     return window.APP_CONFIG || {};
@@ -58,6 +59,10 @@
   }
 
   function loadCompleted() {
+    if (platformAdapter && typeof platformAdapter.getProgress === "function") {
+      return platformAdapter.getProgress();
+    }
+
     var rawPrimary = localStorage.getItem(STORAGE_KEY);
     var primary = parseCompletedRaw(rawPrimary);
     if (primary.length) return primary;
@@ -66,17 +71,23 @@
     return parseCompletedRaw(rawLegacy);
   }
 
-  function saveCompleted(ids) {
+  async function saveCompleted(ids) {
     var clean = Array.from(new Set(ids));
+
+    if (platformAdapter && typeof platformAdapter.setProgress === "function") {
+      await platformAdapter.setProgress(clean);
+      return;
+    }
+
     localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
     localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(clean));
   }
 
-  function markCompleted(id) {
+  async function markCompleted(id) {
     var completed = loadCompleted();
     if (!completed.includes(id)) {
       completed.push(id);
-      saveCompleted(completed);
+      await saveCompleted(completed);
     }
   }
 
@@ -208,6 +219,9 @@
 
     var rawStorage = localStorage.getItem(STORAGE_KEY);
     var rawLegacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    var progressSource = platformAdapter && typeof platformAdapter.getStorageSource === "function"
+      ? platformAdapter.getStorageSource()
+      : "localStorage";
 
     var lines = [
       "DEBUG MODE",
@@ -216,6 +230,7 @@
       "localStorage." + STORAGE_KEY + ": " + String(rawStorage),
       "localStorage.completedLessons raw value: " + String(rawLegacy),
       "parsed completedLessons array: " + JSON.stringify(completed),
+      "progress source: " + progressSource,
       "maxCompletedDayNumber: " + model.maxCompletedDayNumber,
       "unlockThreshold: " + model.threshold,
       ""
@@ -255,7 +270,7 @@
   }
 
   function renderDashboard(lessons, config) {
-    var user = getTelegramUser();
+    var user = (platformAdapter && typeof platformAdapter.getPlatformUser === "function" && platformAdapter.getPlatformUser()) || getTelegramUser();
     var name = getUserName(user);
     var avatar = document.getElementById("avatar");
     var studentName = document.getElementById("studentName");
@@ -593,8 +608,8 @@
       completeBtn.disabled = true;
     }
 
-    completeBtn.addEventListener("click", function () {
-      markCompleted(lesson.lesson_id);
+    completeBtn.addEventListener("click", async function () {
+      await markCompleted(lesson.lesson_id);
       completeBtn.textContent = "Пройдено ✓";
       completeBtn.disabled = true;
       setTimeout(function () {
@@ -638,6 +653,17 @@
     var config = getConfig();
     applyTheme(config);
     initTelegramViewport();
+
+    if (platformAdapter && typeof platformAdapter.init === "function") {
+      try {
+        await platformAdapter.init({
+          storageKey: STORAGE_KEY,
+          legacyStorageKey: LEGACY_STORAGE_KEY
+        });
+      } catch (error) {
+        console.log("[PlatformAdapter] init failed in app.js, fallback to localStorage", error);
+      }
+    }
 
     var page = document.body.getAttribute("data-page");
     if (page === "dashboard") {
